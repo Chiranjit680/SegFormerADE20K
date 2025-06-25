@@ -8,7 +8,7 @@ import mmcv
 import torch
 from mmcv.runner import init_dist
 from mmcv.utils import Config, DictAction, get_git_hash
-
+from fvcore.nn import FlopCountAnalysis, parameter_count
 from mmseg import __version__
 from mmseg.apis import set_random_seed, train_segmentor
 from mmseg.datasets import build_dataset
@@ -152,6 +152,8 @@ def main():
             PALETTE=datasets[0].PALETTE)
     # add an attribute for visualization convenience
     model.CLASSES = datasets[0].CLASSES
+    start_time = time.time()
+    torch.cuda.reset_peak_memory_stats()
     train_segmentor(
         model,
         datasets,
@@ -160,6 +162,31 @@ def main():
         validate=(not args.no_validate),
         timestamp=timestamp,
         meta=meta)
+    end_time = time.time()
+    total_time = end_time - start_time
+    total_time_str = f'Total time: {total_time // 3600} h ' \
+                     f'{(total_time % 3600) // 60} min ' \
+                     f'{total_time % 60:.2f} sec'
+    logger.info(total_time_str)
+    max_mem = torch.cuda.max_memory_allocated() / 1024**2 
+    logger.info(f'Maximum memory usage: {max_mem:.2f} MB')
+    cfg = Config.fromfile('local_configs/segformer/B1/segformer.b1.512x512.ade.160k.py')
+    cfg.model.pretrained = None  # Don't load pretrained weights for profiling
+
+    # Build model
+    model = build_segmentor(cfg.model, train_cfg=None, test_cfg=cfg.get('test_cfg'))
+    model.eval()
+    model.cuda()
+
+    # Dummy input
+    input_tensor = torch.randn(1, 3, 512, 512).cuda()
+
+    # FLOPs & Params
+    flops = FlopCountAnalysis(model, input_tensor)
+    params = parameter_count(model)
+
+
+    
 
 
 if __name__ == '__main__':
